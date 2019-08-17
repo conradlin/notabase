@@ -14,26 +14,45 @@ let collectionSchemaStore = {}
 
 
 class Notabase {
-    constructor(token, ) {
-        this.token = token
-        if (token) {
+    constructor(options) {
+        const { proxy: { url, authCode }, token } = options
+        // proxy > browser env + cloudflare worker
+        // token > node env
+
+        if (url) {
+            // browser env
+            this.url = url // cloudflare worker url
+            // auth code for cloudflare worker (nobody knows but you ,same to the code that config in cf-worker)
+            // without authCode you can only retrieve and cannot creat/update/delete
+            this.authCode = authCode
+
             this.reqeust = {
-                async post(url, data, { header }) {
-                    let r = await fetch(`${url}?body=${JSON.stringify(data)}`, {
+                async post(path, data) {
+                    let r = await fetch(`${this.url}${path}?body=${JSON.stringify(data)}`, {
                         method: 'GET',
-                        headers: header
+                        headers: {
+                            'content-type': 'application/json;charset=UTF-8',
+                            'auth-code': this.authCode, // custom header
+                        }
                     })
                     return await r.json()
                 }
             }
-            // fixme 
         } else {
+            // node env
+            this.token = token
+            let tkHeader = token ? { 'cookies': token } : {}
             this.reqeust = {
-                async post(url, data, { header }) {
-                    let r = await fetch(`${url}?body=${JSON.stringify(data)}`, {
-                        method: 'GET',
-                        headers: header
-                    })
+                async post(path, data) {
+                    let r = await fetch(`${NOTION_BASE_URL}${path}`,
+                        {
+                            method: 'POST',
+                            headers: {
+                                'content-type': 'application/json;charset=UTF-8',
+                                ...tkHeader
+                            },
+                            body: JSON.stringify(data)
+                        })
                     return await r.json()
                 }
             }
@@ -52,19 +71,16 @@ class Notabase {
         let r = await this.getRecordValues([pageId], [])
         let viewId = r[0].value[pageId].view_ids[0]
 
-        let browseableUrl = `https://notion.so/${this.getBlockHashId(pageId)}?v=${this.getBlockHashId(viewId)}`
+        let browseableUrl = `${NOTION_BASE_URL}${this.getBlockHashId(pageId)}?v=${this.getBlockHashId(viewId)}`
         return browseableUrl
     }
 
     async getRecordValues(blockIds, collectionIds) {
         let requestsIds = [...blockIds.map(item => ({ "table": "block", "id": item })), ...collectionIds.map(item => ({ "table": "collection", "id": item }))]
         console.log(`>>>> getRecordValues:${requestsIds}`)
-        let data = await this.reqeust.post(`${NOTION_PROXY_API_URL}/api/v3/getRecordValues`,
+        let data = await this.reqeust.post(`/api/v3/getRecordValues`,
             {
                 requests: requestsIds
-            },
-            {
-                header: { 'content-type': 'application/json;charset=UTF-8' }
             })
         return data.results
     }
@@ -87,10 +103,8 @@ class Notabase {
     async getPageCollectionInfo(pageId) {
         console.log(`>>>> getPageChunk:${pageId}`)
         let data = await this.reqeust.post(`${NOTION_PROXY_API_URL}/api/v3/loadPageChunk`,
-            { "pageId": this.getFullBlockId(pageId), "limit": 50, "cursor": { "stack": [] }, "chunkNumber": 0, "verticalColumns": false },
-            {
-                header: { 'content-type': 'application/json;charset=UTF-8' }
-            })
+            { "pageId": this.getFullBlockId(pageId), "limit": 50, "cursor": { "stack": [] }, "chunkNumber": 0, "verticalColumns": false }
+        )
         let collectionId = Object.entries(data.recordMap.collection)[0][0]
         let collectionViewId = Object.entries(data.recordMap.collection_view)[0][0]
         return [collectionId, collectionViewId]
@@ -104,9 +118,9 @@ class Notabase {
         let rUrl
         if (url.startsWith("https://s3")) {
             let [parsedOriginUrl] = url.split("?")
-            rUrl = `${NOTION_PROXY_API_URL}/image/${encodeURIComponent(parsedOriginUrl).replace("s3.us-west", "s3-us-west")}`
+            rUrl = `${NOTION_BASE_URL}/image/${encodeURIComponent(parsedOriginUrl).replace("s3.us-west", "s3-us-west")}`
         } else if (url.startsWith("/image")) {
-            rUrl = `${NOTION_PROXY_API_URL}${url}`
+            rUrl = `${NOTION_BASE_URL}${url}`
         } else {
             rUrl = url
         }
@@ -121,13 +135,11 @@ class Notabase {
 
     async fetchCollectionData(collectionId, collectionViewId) {
 
-        let data = await this.reqeust.post(`${NOTION_PROXY_API_URL}/api/v3/queryCollection`, {
+        let data = await this.reqeust.post(`/api/v3/queryCollection`, {
             collectionId,
             collectionViewId,
             loader: { type: "table" }
-        }, {
-                header: { 'content-type': 'application/json;charset=UTF-8' }
-            })
+        })
         console.log(`>>>> queryCollection:${collectionId}`)
         // prefetch relation  data 
         let schema = data.recordMap.collection[collectionId].value.schema
